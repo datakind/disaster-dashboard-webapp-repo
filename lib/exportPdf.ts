@@ -1,12 +1,15 @@
 import type { jsPDF } from "jspdf";
+import type { DecisionReadinessResult } from "@/types/decision";
 import type { QualityCheckResult } from "@/types/quality";
 import type { TransformationStep } from "@/types/transformations";
 import { captureElementAsPngDataUrl } from "./exportCapture";
+import { watermarkLabelForStatus } from "./readinessGate";
 
 export type DashboardPdfOptions = {
   filename: string;
   title: string;
   metadata: string[];
+  decisionReadiness?: DecisionReadinessResult;
   qualityResults: QualityCheckResult[];
   transformationLog: TransformationStep[];
 };
@@ -22,6 +25,10 @@ type PdfBlock =
     }
   | { type: "heading"; title: string };
 
+export function formatPdfTimestamp(date = new Date()) {
+  return `${date.toISOString().slice(0, 19).replace("T", " ")} UTC`;
+}
+
 export async function exportElementAsPdf(
   element: HTMLElement,
   options: DashboardPdfOptions,
@@ -32,6 +39,9 @@ export async function exportElementAsPdf(
   const pageHeight = pdf.internal.pageSize.getHeight();
   const margin = 36;
   const contentWidth = pageWidth - margin * 2;
+  const watermarkLabel = watermarkLabelForStatus(
+    options.decisionReadiness?.status,
+  );
   let cursor = margin;
 
   pdf.setFont("helvetica", "bold");
@@ -62,6 +72,17 @@ export async function exportElementAsPdf(
     );
   }
   cursor += 12;
+
+  if (options.decisionReadiness) {
+    cursor = writeDecisionReadinessSection(
+      pdf,
+      options.decisionReadiness,
+      margin,
+      cursor,
+      contentWidth,
+      pageHeight,
+    );
+  }
 
   const blocks = dashboardPdfBlocks(element);
   for (let index = 0; index < blocks.length;) {
@@ -113,14 +134,7 @@ export async function exportElementAsPdf(
   );
   pdf.setFont("helvetica", "normal");
   pdf.setFontSize(10);
-  const actionableQuality = options.qualityResults.filter(
-    (result) => result.status !== "pass",
-  );
-  const qualityLines = actionableQuality.length
-    ? actionableQuality.map(
-        (result) => `${result.status.toUpperCase()}: ${result.description}`,
-      )
-    : ["No quality checks require attention."];
+  const qualityLines = qualityLinesForPdf(options.qualityResults);
   for (const line of qualityLines.slice(0, 12)) {
     cursor = writeWrappedLine(
       pdf,
@@ -164,7 +178,63 @@ export async function exportElementAsPdf(
     );
   }
 
+  if (watermarkLabel) {
+    writeReviewWatermark(pdf, watermarkLabel, pageWidth, pageHeight, margin);
+  }
+
   pdf.save(options.filename);
+}
+
+function writeDecisionReadinessSection(
+  pdf: Pdf,
+  readiness: DecisionReadinessResult,
+  margin: number,
+  cursor: number,
+  contentWidth: number,
+  pageHeight: number,
+) {
+  cursor = addPageIfNeeded(pdf, cursor, 48, pageHeight, margin);
+  cursor = writeBlockHeading(
+    pdf,
+    "Decision Readiness",
+    margin,
+    cursor,
+    pageHeight,
+  );
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(10);
+  const readinessLines = [
+    `${readiness.title}: ${readiness.summary}`,
+    ...readiness.caveats.map((caveat) => `Caveat: ${caveat}`),
+  ];
+  for (const line of readinessLines.slice(0, 8)) {
+    cursor = writeWrappedLine(
+      pdf,
+      line,
+      margin,
+      cursor,
+      contentWidth,
+      pageHeight,
+      margin,
+    );
+  }
+  return cursor + 10;
+}
+
+export function qualityLinesForPdf(qualityResults: QualityCheckResult[]) {
+  const actionableQuality = qualityResults.filter(
+    (result) => result.status !== "pass",
+  );
+  return actionableQuality.length
+    ? actionableQuality.map((result) =>
+        [
+          `${result.status.toUpperCase()}: ${result.description}`,
+          result.caveat ? `Caveat: ${result.caveat}` : undefined,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      )
+    : ["No quality checks require attention."];
 }
 
 function dashboardPdfBlocks(element: HTMLElement): PdfBlock[] {
@@ -189,9 +259,7 @@ function dashboardPdfBlocks(element: HTMLElement): PdfBlock[] {
         ...cards.map((card) => ({
           type: "element" as const,
           element: card,
-          layout: card.classList.contains("chart-card-table")
-            ? "full" as const
-            : "card" as const,
+          layout: pdfLayoutForCard(card),
         })),
       );
     } else {
@@ -200,6 +268,18 @@ function dashboardPdfBlocks(element: HTMLElement): PdfBlock[] {
   }
 
   return blocks;
+}
+
+function pdfLayoutForCard(card: HTMLElement): "full" | "card" {
+  if (
+    card.classList.contains("featured") ||
+    card.classList.contains("chart-card-summary") ||
+    card.classList.contains("chart-card-missingness") ||
+    card.classList.contains("chart-card-table")
+  ) {
+    return "full";
+  }
+  return "card";
 }
 
 function isCardBlock(
@@ -357,4 +437,26 @@ function addPageIfNeeded(
   if (cursor + requiredHeight <= pageHeight - margin) return cursor;
   pdf.addPage();
   return margin;
+}
+
+function writeReviewWatermark(
+  pdf: Pdf,
+  label: string,
+  pageWidth: number,
+  pageHeight: number,
+  margin: number,
+) {
+  const pageCount = pdf.getNumberOfPages();
+  for (let page = 1; page <= pageCount; page += 1) {
+    pdf.setPage(page);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(9);
+    pdf.setTextColor(127, 29, 29);
+    pdf.text(
+      label,
+      Math.max(margin, pageWidth - margin - pdf.getTextWidth(label)),
+      pageHeight - 18,
+    );
+  }
+  pdf.setTextColor(0, 0, 0);
 }

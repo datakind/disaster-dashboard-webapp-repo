@@ -1,7 +1,9 @@
 import type { DatasetProfile } from "./dataset";
+import type { DecisionBrief } from "./decision";
 
 export type DashboardSection =
   | "overview"
+  | "location"
   | "comparisons"
   | "quality"
   | "details";
@@ -17,11 +19,36 @@ export type DashboardInsightType =
 
 export type MetricAggregation = "sum" | "average" | "count";
 export type RecommendationScope = "workflow" | "dashboard";
+export type CopilotTaskType =
+  | "form_schema_interpretation"
+  | "workflow_harmonization"
+  | "dashboard_synthesis"
+  | "quality_repair_guidance"
+  | "decision_handoff_summary";
+export type AnnotationTone = "neutral" | "success" | "warn" | "alert";
+export type MobileBehavior =
+  | "auto"
+  | "top5"
+  | "collapse-legend"
+  | "table-fallback";
+export type QualityBadge = "ok" | "warn" | "block";
+export type SortBy = "time_asc" | "value_desc" | "label_asc";
+export type MeasureType = "count" | "rate" | "ratio" | "density" | "index";
+export type ClassificationMethod = "quantile" | "jenks" | "equal_interval";
 export type CleaningTransformType =
   | "trim_whitespace"
   | "normalize_empty_strings"
   | "convert_numeric_strings"
   | "convert_boolean_strings";
+
+export type AnnotationSpec = {
+  id: string;
+  label: string;
+  xValue?: string | number;
+  yValue?: number;
+  value?: number;
+  tone?: AnnotationTone;
+};
 
 export type CleaningTransform = {
   type: CleaningTransformType;
@@ -46,22 +73,43 @@ export type ChartRecommendation = {
   id: string;
   chartType:
     | "bar"
+    | "area"
+    | "choropleth"
     | "line"
+    | "map"
     | "pie"
     | "table"
     | "summary"
     | "scatter"
-    | "missingness";
+    | "missingness"
+    | "stacked-area"
+    | "small-multiples";
   title: string;
+  subtitle?: string;
   xField?: string;
   yField?: string;
   groupByField?: string;
   metricField?: string;
   aggregation?: MetricAggregation;
   rationale: string;
+  unit?: string;
+  timeScope?: string;
+  sourceNote?: string;
+  annotations?: AnnotationSpec[];
+  qualityBadge?: QualityBadge;
+  mobileBehavior?: MobileBehavior;
+  sortBy?: SortBy;
+  maxCategories?: number;
+  screenReaderSummary?: string;
   section?: DashboardSection;
   priority?: number;
   supportedInsightIds?: string[];
+  geoKey?: string;
+  dataKey?: string;
+  measureType?: MeasureType;
+  classificationMethod?: ClassificationMethod;
+  classCount?: number;
+  fallbackChartType?: "bar" | "table";
 };
 
 export type DashboardRecommendation = {
@@ -120,6 +168,10 @@ export type AIRecommendationResponse = {
   summary: string;
   source?: "deterministic" | "llm";
   fallbackReason?:
+    | "ai_disabled"
+    | "unauthenticated"
+    | "not_entitled"
+    | "quota_exceeded"
     | "missing_api_key"
     | "unsupported_provider"
     | "app_rate_limit"
@@ -149,6 +201,7 @@ export type AIRecommendationResponse = {
 export type WorkflowContext = {
   mode: "single" | "multi";
   profiles: DatasetProfile[];
+  decisionContext?: DecisionBrief;
   dashboardFacts?: DashboardInsightFact[];
   qualitySummary?: string[];
   transformationSummary?: string[];

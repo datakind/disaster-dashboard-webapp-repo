@@ -3,18 +3,48 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "About | Dashboard Copilot",
   description:
-    "How Dashboard Copilot helps turn humanitarian datasets into transparent dashboards.",
+    "How to use Dashboard Copilot to turn disaster-response datasets into reviewable decision-support packages.",
 };
 
 const resources = [
   {
     title: "Code Repository",
-    href: "https://github.com/datakind/disaster-dashboard-webapp-repo",
-    description: "The open-sourced code behind Dashboard Copilot.",
+    href: "https://github.com/CharnritK/disaster-dashboard-webapp-repo",
+    description: "The current fork and review path for Dashboard Copilot.",
+  },
+  {
+    title: "Public-Good Guide",
+    href: "https://github.com/CharnritK/disaster-dashboard-webapp-repo/blob/main/docs/digital-public-good-guide.md",
+    description:
+      "Plain-English project tutorial, scope, extension guidance, and technical appendix.",
+  },
+  {
+    title: "Release Readiness",
+    href: "https://github.com/CharnritK/disaster-dashboard-webapp-repo/blob/main/docs/release-readiness.md",
+    description:
+      "Controlled-beta gates, current staging posture, and production approval boundary.",
+  },
+  {
+    title: "Showcase Script",
+    href: "https://github.com/CharnritK/disaster-dashboard-webapp-repo/blob/main/docs/showcase-script.md",
+    description:
+      "A short presenter path for explaining the workflow without overselling the demo.",
+  },
+  {
+    title: "Showcase Review Assets",
+    href: "https://github.com/CharnritK/disaster-dashboard-webapp-repo/pull/7/files",
+    description:
+      "Under-review deck notes, Typhoon Kestrel synthetic files, and deterministic PPTX build scripts.",
+  },
+  {
+    title: "Tutorial Video Source",
+    href: "https://github.com/CharnritK/disaster-dashboard-webapp-repo/tree/main/tutorial-video",
+    description:
+      "Remotion source project, captured walkthrough screens, narration scripts, and render notes for the embedded tutorial series.",
   },
   {
     title: "License",
-    href: "https://github.com/datakind/disaster-dashboard-webapp-repo?tab=Apache-2.0-1-ov-file#readme",
+    href: "https://github.com/CharnritK/disaster-dashboard-webapp-repo?tab=Apache-2.0-1-ov-file#readme",
     description: "Open-source licensing for Dashboard Copilot.",
   },
   {
@@ -29,6 +59,88 @@ const resources = [
     description:
       "A nonprofit focused on applying data science and AI in service of social impact organizations.",
   },
+];
+
+const workflowSteps = [
+  {
+    title: "Pick the decision",
+    body: "Start with response prioritization, service gap monitoring, or preparedness risk screening, then confirm the action owner, geography, timeframe, and evidence needs.",
+  },
+  {
+    title: "Load sample or local files",
+    body: "Use the public demo samples for a safe first run, use the Typhoon Kestrel synthetic files for a richer multi-file scenario, or sign in to the workspace before uploading CSV/XLSX data.",
+  },
+  {
+    title: "Inspect evidence coverage",
+    body: "Review field roles, join keys, missingness, duplicate signals, and whether the data supports the decision.",
+  },
+  {
+    title: "Review harmonization",
+    body: "Accept or adjust candidate joins and row-preserving cleaning transforms before preparing the dataset.",
+  },
+  {
+    title: "Generate and export",
+    body: "Use the dashboard, caveats, PDF report, transformation log, handoff log, or project kit as review artifacts.",
+  },
+];
+
+const entryPoints = [
+  {
+    title: "Public demo",
+    href: "/demo",
+    action: "Open demo",
+    body: "No login. Uses bundled synthetic data and deterministic review guidance so a new user can learn the flow safely.",
+  },
+  {
+    title: "Authenticated workspace",
+    href: "/app",
+    action: "Open workspace",
+    body: "Login required. Use this path for uploaded CSV/XLSX files, optional AI attempts, usage metering, feedback, templates, and exports.",
+  },
+  {
+    title: "Progress and gates",
+    href: "/progress",
+    action: "View progress",
+    body: "Check what is implemented, what is under review, what was locally verified, and what still needs approval before production.",
+  },
+  {
+    title: "Showcase package",
+    href: "https://github.com/CharnritK/disaster-dashboard-webapp-repo/pull/7",
+    action: "View review assets",
+    body: "Review the deck notes, Typhoon Kestrel synthetic files, and build scripts before merging any showcase assets into main.",
+  },
+];
+
+const tutorialVideos = [
+  {
+    title: "Part 1: Why Trust Breaks Before the Chart",
+    duration: "37 seconds",
+    src: "/tutorial/fragmented-data-painpoint.mp4",
+    poster: "/tutorial/fragmented-data-painpoint-poster.png",
+    body: "The problem story: fragmented disaster-response data creates trust pressure before a dashboard exists.",
+  },
+  {
+    title: "Part 2: Run the Public Demo",
+    duration: "67 seconds",
+    src: "/tutorial/public-demo-user-flow.mp4",
+    poster: "/tutorial/public-demo-user-flow-poster.png",
+    body: "The core walkthrough: template, synthetic samples, profiling, harmonization, readiness, dashboard, and handoff.",
+  },
+  {
+    title: "Part 3: When Data Is Not Ready",
+    duration: "46 seconds",
+    src: "/tutorial/trust-risk-user-flow.mp4",
+    poster: "/tutorial/trust-risk-user-flow-poster.png",
+    body: "The trust walkthrough: blockers, evidence-before-advice, caveats, and the session-only data boundary.",
+  },
+];
+
+const tutorialChapters = [
+  "Start with the decision question before choosing charts.",
+  "Use bundled synthetic samples for a safe first run.",
+  "Profile evidence quality before trusting generated guidance.",
+  "Review joins, cleaning, readiness, dashboard output, and exports.",
+  "Keep blockers, caveats, and handoff context visible for human review.",
 ];
 
 export default function AboutPage() {
@@ -47,6 +159,9 @@ export default function AboutPage() {
             >
               About
             </a>
+            <a className="header-nav-link" href="/progress">
+              Progress
+            </a>
           </div>
         </div>
       </header>
@@ -54,107 +169,170 @@ export default function AboutPage() {
       <div className="about-shell">
         <section className="about-hero">
           <p className="eyebrow">About</p>
-          <h1>Dashboard Copilot for Humanitarian Aid</h1>
+          <h1>Dashboard Copilot for Disaster Response Decisions</h1>
           <p className="about-lede">
-            Dashboard Copilot helps teams turn CSV and XLSX datasets into a
-            prepared dataset, quality checks, recommended visualizations, and
-            exportable dashboard artifacts without hiding the data preparation
-            steps that shaped the result.
+            Dashboard Copilot helps response teams turn fragmented,
+            non-sensitive CSV and XLSX data into a reviewable decision-support
+            package: profiled evidence, safe preparation steps, readiness
+            checks, candidate visualizations, caveats, and exportable handoff
+            artifacts.
           </p>
+          <div className="about-actions" aria-label="Primary entry points">
+            <a className="primary-action" href="/demo">
+              Try the public demo
+            </a>
+            <a className="secondary-action" href="/app">
+              Open the workspace
+            </a>
+          </div>
         </section>
 
         <section className="about-grid" aria-label="Application overview">
           <article className="about-panel">
-            <h2>What It Does</h2>
+            <h2>What It Is</h2>
             <p>
-              The workflow profiles uploaded or sample data, recommends safe
-              harmonization steps, applies typed row-preserving cleaning
-              transforms, validates the prepared dataset, and generates a
-              dashboard with charts and insights tailored to the available
-              fields.
+              A controlled-beta decision-readiness workflow for humanitarian
+              and disaster-response teams. The product is built to support
+              human review, not to approve an operational action automatically.
             </p>
           </article>
           <article className="about-panel">
-            <h2>What Stays Visible</h2>
+            <h2>What It Produces</h2>
             <p>
-              Joins, cleaning operations, quality warnings, assumptions, and
-              exportable transformation logs remain visible so analysts can
-              review what changed before sharing a dashboard or prepared data.
+              Prepared data, quality warnings, candidate charts, dashboard
+              insights, PDF/image exports, transformation logs, decision
+              handoff logs, and a project kit for second-pass implementation.
             </p>
           </article>
           <article className="about-panel">
-            <h2>How AI is Used</h2>
+            <h2>Showcase Materials</h2>
             <p>
-              When enabled, the server asks the configured LLM for structured
-              recommendations using minimized profile metadata. The app keeps
-              deterministic fallbacks available when AI is off, unavailable,
-              rate limited, or unable to return valid structured output.
+              Review assets include deterministic deck builders, verification
+              scripts, and the synthetic Typhoon Kestrel multi-file sample for
+              richer walkthroughs without using real disaster data.
+            </p>
+          </article>
+          <article className="about-panel">
+            <h2>How AI Fits</h2>
+            <p>
+              AI is optional and advisory. Provider calls require server-side
+              enablement, authentication, entitlement, and quota. Deterministic
+              guidance remains the fallback and the validation anchor.
             </p>
           </article>
         </section>
 
         <section className="about-section">
           <div className="section-heading">
+            <p className="eyebrow">Tutorial</p>
+            <h2>Watch the Three-Part Tutorial Series</h2>
+          </div>
+          <div className="about-video-grid tutorial-series-grid">
+            <div className="tutorial-video-list">
+              {tutorialVideos.map((video) => (
+                <article className="about-video-card tutorial-video-card" key={video.src}>
+                  <video
+                    aria-label={`${video.title} tutorial video`}
+                    controls
+                    poster={video.poster}
+                    preload="metadata"
+                  >
+                    <source src={video.src} type="video/mp4" />
+                    Your browser does not support embedded video. Open the
+                    tutorial source from the resources section below.
+                  </video>
+                  <div className="tutorial-video-copy">
+                    <div className="tutorial-video-meta">
+                      <span>{video.duration}</span>
+                      <span>Narrated walkthrough</span>
+                    </div>
+                    <h3>{video.title}</h3>
+                    <p>{video.body}</p>
+                  </div>
+                </article>
+              ))}
+            </div>
+            <aside className="about-note tutorial-summary">
+              <h3>What the tutorial covers</h3>
+              <ul>
+                {tutorialChapters.map((chapter) => (
+                  <li key={chapter}>{chapter}</li>
+                ))}
+              </ul>
+              <a className="secondary-action" href="/demo">
+                Start with the deterministic demo
+              </a>
+            </aside>
+          </div>
+        </section>
+
+        <section className="about-section">
+          <div className="section-heading">
+            <p className="eyebrow">Start here</p>
+            <h2>Choose the Right Entry Point</h2>
+          </div>
+          <div className="entry-grid">
+            {entryPoints.map((entry) => {
+              const isExternal = entry.href.startsWith("http");
+
+              return (
+                <article className="entry-card" key={entry.href}>
+                  <h3>{entry.title}</h3>
+                  <p>{entry.body}</p>
+                  <a
+                    className="secondary-action"
+                    href={entry.href}
+                    target={isExternal ? "_blank" : undefined}
+                    rel={isExternal ? "noreferrer" : undefined}
+                  >
+                    {entry.action}
+                  </a>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="about-section">
+          <div className="section-heading">
             <p className="eyebrow">Workflow</p>
-            <h2>Designed for Review Before Publication</h2>
+            <h2>Use It as a Review Workflow</h2>
           </div>
           <ol className="about-steps">
-            <li>
-              <strong>Upload data</strong>
-              <span>
-                Load CSV/XLSX files or use the bundled humanitarian sample
-                datasets.
-              </span>
-            </li>
-            <li>
-              <strong>Profile fields</strong>
-              <span>
-                Identify likely join keys, metrics, categories, missingness, and
-                duplicates.
-              </span>
-            </li>
-            <li>
-              <strong>Harmonize safely</strong>
-              <span>
-                Apply typed transforms such as trimming whitespace and
-                converting numeric strings.
-              </span>
-            </li>
-            <li>
-              <strong>Validate and generate</strong>
-              <span>
-                Review quality checks, then generate recommended charts and
-                insights.
-              </span>
-            </li>
-            <li>
-              <strong>Export artifacts</strong>
-              <span>
-                Download prepared data, dashboard images, PDF reports, and
-                transformation logs.
-              </span>
-            </li>
+            {workflowSteps.map((step) => (
+              <li key={step.title}>
+                <strong>{step.title}</strong>
+                <span>{step.body}</span>
+              </li>
+            ))}
           </ol>
         </section>
 
         <section className="about-section">
           <div className="section-heading">
             <p className="eyebrow">Data handling</p>
-            <h2>Current Prototype Boundaries</h2>
+            <h2>Controlled-Beta Boundaries</h2>
           </div>
           <div className="about-note">
             <p>
-              Uploaded files are held in browser session memory. The browser
-              never reads the server LLM API key. When AI recommendations are
-              enabled, the server sends minimized profile metadata and capped
-              sample values to the configured provider; full uploaded rows are
-              not sent to the recommendation route.
+              Uploaded disaster data remains session-only. The app may persist
+              account/profile metadata, AI usage metadata, feedback, custom
+              templates, template versions, and non-sensitive admin/evaluation
+              metadata; it must not persist uploaded files, raw rows, prepared
+              rows, full datasets, exports, full prompts, row-like model
+              responses, or secrets.
+            </p>
+            <p>
+              The public demo uses synthetic sample data and does not make AI
+              calls. Authenticated workspace routes can use optional AI only
+              after the server verifies access and quota, and AI output remains
+              secondary to deterministic validation and visible caveats.
             </p>
             <p>
               This application does not replace operational review, statistical
-              validation, or accountability processes. Use it to speed up first
-              drafts, surface quality issues, and make preparation steps easier
-              to inspect.
+              validation, domain approval, or accountability processes. Use it
+              to standardize first drafts, surface quality issues, and make
+              preparation steps easier to inspect before stakeholders act.
             </p>
           </div>
         </section>

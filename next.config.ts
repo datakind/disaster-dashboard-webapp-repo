@@ -14,7 +14,10 @@ const contentSecurityPolicy = [
   "form-action 'self'"
 ].join("; ");
 
+const isVercelBuild = process.env.VERCEL === "1" || process.env.VERCEL === "true";
+
 const nextConfig: NextConfig = {
+  ...(isVercelBuild ? {} : { distDir: "dist" }),
   poweredByHeader: false,
   async headers() {
     return [

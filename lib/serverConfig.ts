@@ -1,3 +1,24 @@
+import type { CopilotTaskType, RecommendationScope } from "@/types/recommendations";
+
+export type LlmReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh";
+
+export type LlmTextVerbosity = "low" | "medium" | "high";
+
+export type LlmTaskConfig = {
+  taskType: CopilotTaskType;
+  model: string;
+  reasoningEffort: LlmReasoningEffort;
+  verbosity: LlmTextVerbosity;
+  timeoutMs: number;
+  maxOutputTokens: number;
+};
+
 function numberFromEnv(name: string, fallback: number, min = 0) {
   const raw = process.env[name];
   if (!raw) return fallback;
@@ -5,10 +26,38 @@ function numberFromEnv(name: string, fallback: number, min = 0) {
   return Number.isFinite(value) ? Math.max(min, value) : fallback;
 }
 
-function booleanFromEnv(name: string, fallback: boolean) {
+function stringFromEnv(
+  env: NodeJS.ProcessEnv,
+  name: string,
+): string | undefined {
+  const raw = env[name];
+  return raw?.trim() ? raw : undefined;
+}
+
+export function booleanFromEnv(name: string, fallback: boolean) {
   const raw = process.env[name];
   if (!raw) return fallback;
   return !["0", "false", "off", "no"].includes(raw.trim().toLowerCase());
+}
+
+function modelFromEnv(
+  env: NodeJS.ProcessEnv,
+  taskModelName: string,
+  taskDefault: string,
+) {
+  return env[taskModelName] ?? env.LLM_MODEL ?? taskDefault;
+}
+
+function numberFromRecord(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  fallback: number,
+  min = 0,
+) {
+  const raw = env[name];
+  if (!raw) return fallback;
+  const value = Number(raw);
+  return Number.isFinite(value) ? Math.max(min, value) : fallback;
 }
 
 export const recommendationApiConfig = {
@@ -23,14 +72,143 @@ export const recommendationApiConfig = {
   maxSummaryItems: numberFromEnv("RECOMMEND_MAX_SUMMARY_ITEMS", 8, 0)
 };
 
-const defaultLlmTimeoutMs = numberFromEnv("LLM_REQUEST_TIMEOUT_MS", 15_000, 1_000);
+export function getLlmServerConfig(env: NodeJS.ProcessEnv = process.env) {
+  const defaultLlmTimeoutMs = numberFromRecord(
+    env,
+    "LLM_REQUEST_TIMEOUT_MS",
+    15_000,
+    1_000,
+  );
+  const defaultMaxOutputTokens = numberFromRecord(
+    env,
+    "LLM_MAX_COMPLETION_TOKENS",
+    3_200,
+    100,
+  );
 
-export const llmServerConfig = {
-  enabled: booleanFromEnv("LLM_ENABLED", true),
-  apiKey: process.env.LLM_API_KEY,
-  provider: process.env.LLM_PROVIDER ?? "openai",
-  model: process.env.LLM_MODEL ?? "gpt-5.4-mini",
-  workflowTimeoutMs: numberFromEnv("LLM_WORKFLOW_REQUEST_TIMEOUT_MS", defaultLlmTimeoutMs, 1_000),
-  dashboardTimeoutMs: numberFromEnv("LLM_DASHBOARD_REQUEST_TIMEOUT_MS", Math.max(defaultLlmTimeoutMs, 45_000), 1_000),
-  maxCompletionTokens: numberFromEnv("LLM_MAX_COMPLETION_TOKENS", 3_200, 100)
-};
+  return {
+    enabled: booleanFromEnvRecord(env, "LLM_ENABLED", false),
+    apiKey: stringFromEnv(env, "LLM_API_KEY") ?? stringFromEnv(env, "OPENAI_API_KEY"),
+    provider: env.LLM_PROVIDER ?? "openai",
+    model: env.LLM_MODEL ?? "gpt-5.4-mini",
+    workflowTimeoutMs: numberFromRecord(
+      env,
+      "LLM_WORKFLOW_REQUEST_TIMEOUT_MS",
+      defaultLlmTimeoutMs,
+      1_000,
+    ),
+    dashboardTimeoutMs: numberFromRecord(
+      env,
+      "LLM_DASHBOARD_REQUEST_TIMEOUT_MS",
+      Math.max(defaultLlmTimeoutMs, 45_000),
+      1_000,
+    ),
+    handoffTimeoutMs: numberFromRecord(
+      env,
+      "LLM_HANDOFF_REQUEST_TIMEOUT_MS",
+      Math.max(defaultLlmTimeoutMs, 30_000),
+      1_000,
+    ),
+    maxCompletionTokens: defaultMaxOutputTokens,
+    maxOutputTokens: defaultMaxOutputTokens,
+  };
+}
+
+export const llmServerConfig = getLlmServerConfig();
+
+function booleanFromEnvRecord(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  fallback: boolean,
+) {
+  const raw = env[name];
+  if (!raw) return fallback;
+  return !["0", "false", "off", "no"].includes(raw.trim().toLowerCase());
+}
+
+export function copilotTaskForRecommendationScope(
+  scope: RecommendationScope,
+): CopilotTaskType {
+  return scope === "workflow" ? "workflow_harmonization" : "dashboard_synthesis";
+}
+
+export function resolveLlmTaskConfig(
+  taskType: CopilotTaskType,
+  env: NodeJS.ProcessEnv = process.env,
+): LlmTaskConfig {
+  const sharedTokenBudget = numberFromRecord(
+    env,
+    "LLM_MAX_COMPLETION_TOKENS",
+    3_200,
+    100,
+  );
+  const baseTimeout = numberFromRecord(
+    env,
+    "LLM_REQUEST_TIMEOUT_MS",
+    15_000,
+    1_000,
+  );
+
+  if (taskType === "workflow_harmonization") {
+    return {
+      taskType,
+      model: modelFromEnv(env, "LLM_WORKFLOW_MODEL", "gpt-5.4-mini"),
+      reasoningEffort: "low",
+      verbosity: "low",
+      timeoutMs: numberFromRecord(env, "LLM_WORKFLOW_REQUEST_TIMEOUT_MS", baseTimeout, 1_000),
+      maxOutputTokens: sharedTokenBudget,
+    };
+  }
+
+  if (taskType === "quality_repair_guidance") {
+    return {
+      taskType,
+      model: modelFromEnv(env, "LLM_QUALITY_GUIDANCE_MODEL", "gpt-5.4-mini"),
+      reasoningEffort: "low",
+      verbosity: "medium",
+      timeoutMs: baseTimeout,
+      maxOutputTokens: sharedTokenBudget,
+    };
+  }
+
+  if (taskType === "form_schema_interpretation") {
+    return {
+      taskType,
+      model: modelFromEnv(env, "LLM_FORM_SCHEMA_MODEL", "gpt-5.4-mini"),
+      reasoningEffort: "low",
+      verbosity: "low",
+      timeoutMs: numberFromRecord(env, "LLM_FORM_SCHEMA_REQUEST_TIMEOUT_MS", baseTimeout, 1_000),
+      maxOutputTokens: Math.min(sharedTokenBudget, 1_200),
+    };
+  }
+
+  if (taskType === "decision_handoff_summary") {
+    return {
+      taskType,
+      model: modelFromEnv(env, "LLM_HANDOFF_MODEL", "gpt-5.5"),
+      reasoningEffort: "medium",
+      verbosity: "medium",
+      timeoutMs: numberFromRecord(
+        env,
+        "LLM_HANDOFF_REQUEST_TIMEOUT_MS",
+        Math.max(baseTimeout, 30_000),
+        1_000,
+      ),
+      maxOutputTokens: sharedTokenBudget,
+    };
+  }
+
+  return {
+    taskType,
+    model: modelFromEnv(env, "LLM_DASHBOARD_MODEL", "gpt-5.5"),
+    reasoningEffort: "medium",
+    verbosity: "medium",
+    timeoutMs: numberFromRecord(
+      env,
+      "LLM_DASHBOARD_REQUEST_TIMEOUT_MS",
+      Math.max(baseTimeout, 45_000),
+      1_000,
+    ),
+    maxOutputTokens: sharedTokenBudget,
+  };
+}

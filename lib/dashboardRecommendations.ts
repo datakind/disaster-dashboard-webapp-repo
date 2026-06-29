@@ -4,6 +4,8 @@ import type { QualityCheckResult } from "@/types/quality";
 import type { TransformationStep } from "@/types/transformations";
 import { fieldDisplayLabel, inferMetricAggregation } from "./chartMetrics";
 import { computeDashboardInsightFacts, factsToDashboardInsights } from "./dashboardInsights";
+import { findLocationFields, isCoordinateField, isIdentifierField, isLatitudeField, isLongitudeField } from "./locationFields";
+import { enforceVizPolicies } from "./vizPolicy";
 
 const MAX_SUMMARY_METRICS = 5;
 const MAX_FIELDS = 8;
@@ -29,6 +31,7 @@ export function generateDeterministicDashboardRecommendation(
   const secondaryGroup = groupByFields.find((field) => field !== primaryGroup);
   const secondaryMetric = metricFields.find((field) => field !== primaryMetric);
   const missingColumns = profile?.columns.filter((column) => column.missingCount > 0) ?? [];
+  const locationFields = findLocationFields(dataset);
   const charts = buildDeterministicCharts({
     primaryGroup,
     primaryMetric,
@@ -37,31 +40,43 @@ export function generateDeterministicDashboardRecommendation(
     dateField: dateFields[0],
     groupByFields,
     metricFields,
-    hasMissingValues: missingColumns.length > 0
+    hasMissingValues: missingColumns.length > 0,
+    locationFields
   });
+  const caveatedCharts = applyChartCaveats(charts, context.qualityResults);
+  const policyCharts = enforceVizPolicies(
+    dataset,
+    context.qualityResults ?? [],
+    caveatedCharts
+  );
 
   return {
     summaryMetrics: uniqueValues(["Total records", ...metricFields.slice(0, MAX_SUMMARY_METRICS - 1)]),
     groupByFields,
     demographicFields: (profile?.potentialDemographicFields ?? []).filter((field) => groupByFields.includes(field)).slice(0, MAX_FIELDS),
     metricFields,
-    charts,
-    insights: buildDeterministicInsights(dataset, charts, context)
+    charts: policyCharts,
+    insights: buildDeterministicInsights(dataset, policyCharts, context)
   };
 }
 
 export function reconcileDashboardRecommendation(
   dataset: Dataset,
-  recommendation?: DashboardRecommendation
+  recommendation?: DashboardRecommendation,
+  context: {
+    qualityResults?: QualityCheckResult[];
+  } = {}
 ): DashboardRecommendation {
-  const fallback = generateDeterministicDashboardRecommendation(dataset);
+  const fallback = generateDeterministicDashboardRecommendation(dataset, context);
   if (!recommendation) return fallback;
 
   const fields = new Set(dataset.columns ?? dataset.profile?.columns.map((column) => column.columnName) ?? []);
-  const numericFields = new Set(getNumericMetricFields(dataset));
+  const metricFieldSet = new Set(getNumericMetricFields(dataset));
+  const numericFields = new Set(getNumericFields(dataset));
   const normalizedRecommendation = normalizeDashboardFields(
     recommendation,
     fields,
+    metricFieldSet,
     numericFields
   );
   const summaryMetrics = mergeValues(
@@ -84,9 +99,15 @@ export function reconcileDashboardRecommendation(
     fallback.metricFields,
     MAX_FIELDS
   );
-  const charts = mergeCharts(
-    normalizedRecommendation.charts.filter((chart) => isUsableChart(chart, fields, numericFields)),
-    fallback.charts
+  const charts = enforceVizPolicies(
+    dataset,
+    context.qualityResults ?? [],
+    mergeCharts(
+      normalizedRecommendation.charts.filter((chart) =>
+        isUsableChart(chart, fields, metricFieldSet, numericFields)
+      ),
+      fallback.charts
+    )
   );
 
   return {
@@ -110,7 +131,8 @@ function buildDeterministicCharts({
   dateField,
   groupByFields,
   metricFields,
-  hasMissingValues
+  hasMissingValues,
+  locationFields
 }: {
   primaryGroup?: string;
   primaryMetric?: string;
@@ -120,8 +142,56 @@ function buildDeterministicCharts({
   groupByFields: string[];
   metricFields: string[];
   hasMissingValues: boolean;
+  locationFields: ReturnType<typeof findLocationFields>;
 }): ChartRecommendation[] {
   const charts: ChartRecommendation[] = [];
+
+  if (
+    locationFields.latitudeField &&
+    locationFields.longitudeField &&
+    locationFields.validCoordinateRowCount >= 2
+  ) {
+    const primaryMetricLabel = primaryMetric
+      ? fieldDisplayLabel(primaryMetric)
+      : "Records";
+    charts.push({
+      id: `chart-map-${slugify(locationFields.latitudeField)}-${slugify(locationFields.longitudeField)}`,
+      chartType: "map",
+      title: primaryMetric
+        ? `${primaryMetricLabel} by uploaded location`
+        : "Uploaded location coverage",
+      xField: locationFields.longitudeField,
+      yField: locationFields.latitudeField,
+      groupByField: locationFields.labelField,
+      metricField: primaryMetric,
+      aggregation: primaryMetric ? inferMetricAggregation(primaryMetric) : "count",
+      section: "location",
+      priority: 1,
+      rationale:
+        "Plots uploaded latitude and longitude values locally. No geocoding, basemap tiles, or boundary geometry are used, so treat this as a coordinate coverage view rather than an authoritative map.",
+      supportedInsightIds: ["fact-location-coverage"]
+    });
+  }
+
+  if (locationFields.areaField) {
+    const areaLabel = fieldDisplayLabel(locationFields.areaField);
+    const primaryMetricLabel = primaryMetric
+      ? fieldDisplayLabel(primaryMetric)
+      : "Records";
+    charts.push({
+      id: `chart-area-${slugify(locationFields.areaField)}-${slugify(primaryMetric ?? "records")}`,
+      chartType: "area",
+      title: `${primaryMetricLabel} by ${areaLabel}`,
+      groupByField: locationFields.areaField,
+      metricField: primaryMetric,
+      aggregation: primaryMetric ? inferMetricAggregation(primaryMetric) : "count",
+      section: "location",
+      priority: 2,
+      rationale:
+        `Compares ${primaryMetricLabel.toLowerCase()} across ${areaLabel}. This is an area intensity view from uploaded fields, not a boundary choropleth.`,
+      supportedInsightIds: ["fact-location-coverage"]
+    });
+  }
 
   if (primaryGroup) {
     const primaryGroupLabel = fieldDisplayLabel(primaryGroup);
@@ -223,13 +293,13 @@ function buildDeterministicCharts({
   charts.push({
     id: "chart-dashboard-signals",
     chartType: "summary",
-    title: "Dashboard signals",
+    title: "Dashboard field check",
     groupByField: primaryGroup,
     metricField: primaryMetric,
     aggregation: primaryMetric ? inferMetricAggregation(primaryMetric) : "count",
     section: "overview",
     priority: 1,
-    rationale: "Summarizes the field roles the dashboard is using for comparison, metrics, and review."
+    rationale: "Shows which grouping and metric fields are driving the dashboard so reviewers can confirm them before handoff."
   });
 
   if (hasMissingValues) {
@@ -293,10 +363,43 @@ function buildDeterministicInsights(
   return factsToDashboardInsights(facts, linkFactsToCharts(facts, charts));
 }
 
+function applyChartCaveats(
+  charts: ChartRecommendation[],
+  qualityResults: QualityCheckResult[] = []
+) {
+  const caveats = qualityResults
+    .filter((issue) => issue.caveat && issue.affectedColumns?.length)
+    .flatMap((issue) =>
+      (issue.affectedColumns ?? []).map((column) => ({
+        column,
+        caveat: issue.caveat!,
+      }))
+    );
+  if (caveats.length === 0) return charts;
+  return charts.map((chart) => {
+    const chartFields = [
+      chart.groupByField,
+      chart.xField,
+      chart.metricField,
+      chart.yField,
+    ].filter((field): field is string => Boolean(field));
+    const matchedCaveats = caveats
+      .filter((item) => chartFields.includes(item.column))
+      .map((item) => item.caveat);
+    if (matchedCaveats.length === 0) return chart;
+    const uniqueCaveats = Array.from(new Set(matchedCaveats));
+    return {
+      ...chart,
+      rationale: `${chart.rationale} Caveat: ${uniqueCaveats.join(" ")}`,
+    };
+  });
+}
+
 function linkFactsToCharts(facts: DashboardInsightFact[], charts: ChartRecommendation[]) {
   const linked = new Map<string, string>();
   for (const fact of facts) {
     const chart = charts.find((candidate) =>
+      candidate.supportedInsightIds?.includes(fact.id) ||
       (fact.metricField &&
         (candidate.metricField === fact.metricField || candidate.yField === fact.metricField)) ||
       (fact.groupField &&
@@ -312,29 +415,38 @@ function linkFactsToCharts(facts: DashboardInsightFact[], charts: ChartRecommend
 function getNumericMetricFields(dataset: Dataset) {
   const profile = dataset.profile;
   const fields = profile?.columns
-    .filter((column) => column.inferredType === "number" && !isCoordinateField(column.columnName))
+    .filter((column) =>
+      column.inferredType === "number" &&
+      !isCoordinateField(column.columnName) &&
+      !isIdentifierField(column.columnName) &&
+      !isGenericIdentifierField(column.columnName) &&
+      !isLowCardinalityGroupingCode(column)
+    )
     .map((column) => column.columnName) ?? [];
   return mergeValues(fields, profile?.potentialMetricFields.filter((field) => fields.includes(field)) ?? [], MAX_FIELDS);
+}
+
+function getNumericFields(dataset: Dataset) {
+  return dataset.profile?.columns
+    .filter((column) => column.inferredType === "number" && !isIdentifierField(column.columnName))
+    .map((column) => column.columnName) ?? [];
 }
 
 function getCategoricalFields(dataset: Dataset) {
   const profile = dataset.profile;
   if (!profile) return dataset.columns?.filter((field) => !isCoordinateField(field)).slice(0, MAX_FIELDS) ?? [];
-  const fieldNames = new Set(profile.columns.map((column) => column.columnName));
+  const categoricalFieldNames = new Set(
+    profile.columns
+      .filter((column) => isUsefulGroupingColumn(column, profile.rowCount))
+      .map((column) => column.columnName),
+  );
   const profileCategories = profile.columns
-    .filter((column) =>
-      fieldNames.has(column.columnName) &&
-      !isCoordinateField(column.columnName) &&
-      column.inferredType !== "number" &&
-      column.inferredType !== "date" &&
-      column.uniqueCount > 1 &&
-      column.uniqueCount <= Math.max(12, Math.ceil((profile.rowCount ?? 1) * 0.7))
-    )
+    .filter((column) => categoricalFieldNames.has(column.columnName))
     .map((column) => column.columnName);
   return mergeValues(
     [
-      ...profile.potentialGeographicFields.filter((field) => !isCoordinateField(field)),
-      ...profile.potentialDemographicFields,
+      ...profile.potentialGeographicFields.filter((field) => categoricalFieldNames.has(field)),
+      ...profile.potentialDemographicFields.filter((field) => categoricalFieldNames.has(field)),
       ...profileCategories
     ],
     [],
@@ -342,21 +454,78 @@ function getCategoricalFields(dataset: Dataset) {
   );
 }
 
+function isUsefulGroupingColumn(
+  column: NonNullable<Dataset["profile"]>["columns"][number],
+  rowCount?: number,
+) {
+  const lowCardinalityCode = isLowCardinalityGroupingCode(column);
+  return (
+    !isCoordinateField(column.columnName) &&
+    (!isGenericIdentifierField(column.columnName) || lowCardinalityCode) &&
+    (column.inferredType !== "number" || lowCardinalityCode) &&
+    column.inferredType !== "date" &&
+    column.uniqueCount > 1 &&
+    column.uniqueCount <= Math.max(12, Math.ceil((rowCount ?? 1) * 0.7))
+  );
+}
+
+function isGenericIdentifierField(field: string) {
+  const normalized = field.toLowerCase();
+  if (isGeographicCodeField(normalized)) return false;
+  return /(^|_)(id|uuid|guid)$|_id$|identifier/.test(normalized);
+}
+
+function isLowCardinalityGroupingCode(
+  column: NonNullable<Dataset["profile"]>["columns"][number],
+) {
+  const normalized = column.columnName.toLowerCase();
+  const uniqueLimit = 6;
+  if (column.uniqueCount < 2 || column.uniqueCount > uniqueLimit) return false;
+  const codeLikeSuffix = /(^|_)(id|code)$/.test(normalized);
+  if (!codeLikeSuffix) return false;
+  const reviewDimensionCode =
+    /(^|_)(status|type|category|class|phase|severity|priority|need|sector|cluster|disaster|hazard|damage|response|service)(_|$)/.test(normalized);
+  return reviewDimensionCode || isGeographicCodeField(normalized);
+}
+
+function isGeographicCodeField(normalized: string) {
+  return (
+    normalized.includes("pcode") ||
+    /(admin|district|region|province|commune|ward|site|location).*(code|id)$/.test(normalized)
+  );
+}
+
 function isUsableChart(
   chart: ChartRecommendation,
   fields: Set<string>,
+  metricFields: Set<string>,
   numericFields: Set<string>
 ) {
   const metricField = chart.metricField ?? chart.yField;
   const groupingField = chart.groupByField ?? chart.xField;
   const aggregation = chart.aggregation ?? inferMetricAggregation(metricField);
-  if (metricField && !numericFields.has(metricField)) return false;
   if (chart.groupByField && !fields.has(chart.groupByField)) return false;
   if (chart.xField && !fields.has(chart.xField)) return false;
   if (chart.yField && !fields.has(chart.yField)) return false;
+  if (chart.chartType === "map") {
+    const hasLatLonAxes =
+      chart.xField && chart.yField &&
+      ((isLongitudeField(chart.xField) && isLatitudeField(chart.yField)) ||
+        (isLatitudeField(chart.xField) && isLongitudeField(chart.yField)));
+    return Boolean(
+      chart.xField &&
+        chart.yField &&
+        hasLatLonAxes &&
+        numericFields.has(chart.xField) &&
+        numericFields.has(chart.yField) &&
+        (!chart.metricField || metricFields.has(chart.metricField))
+    );
+  }
+  if (metricField && !metricFields.has(metricField)) return false;
   if (chart.chartType === "summary") return true;
   if (chart.chartType === "missingness") return true;
-  if (chart.chartType === "table") return !metricField || numericFields.has(metricField);
+  if (chart.chartType === "area") return Boolean(chart.groupByField);
+  if (chart.chartType === "table") return !metricField || metricFields.has(metricField);
   if (chart.chartType === "scatter") {
     const scatterYField = chart.yField ?? chart.metricField;
     return Boolean(
@@ -390,12 +559,13 @@ function mergeCharts(primary: ChartRecommendation[], fallback: ChartRecommendati
 function normalizeDashboardFields(
   recommendation: DashboardRecommendation,
   fields: Set<string>,
+  metricFields: Set<string>,
   numericFields: Set<string>
 ): DashboardRecommendation {
   return {
     ...recommendation,
     summaryMetrics: recommendation.summaryMetrics
-      .map((metric) => normalizeSummaryMetric(metric, numericFields))
+      .map((metric) => normalizeSummaryMetric(metric, metricFields))
       .filter((field): field is string => Boolean(field)),
     groupByFields: recommendation.groupByFields
       .map((field) => normalizeFieldName(field, fields))
@@ -404,14 +574,14 @@ function normalizeDashboardFields(
       .map((field) => normalizeFieldName(field, fields))
       .filter((field): field is string => Boolean(field)),
     metricFields: recommendation.metricFields
-      .map((field) => normalizeFieldName(field, numericFields))
+      .map((field) => normalizeFieldName(field, metricFields))
       .filter((field): field is string => Boolean(field)),
     charts: recommendation.charts.map((chart) => ({
       ...chart,
       xField: normalizeFieldName(chart.xField, fields),
       yField: normalizeFieldName(chart.yField, numericFields),
       groupByField: normalizeFieldName(chart.groupByField, fields),
-      metricField: normalizeFieldName(chart.metricField, numericFields)
+      metricField: normalizeFieldName(chart.metricField, metricFields)
     }))
   };
 }
@@ -549,10 +719,6 @@ function mergeValues(primary: string[], fallback: string[], limit: number) {
 
 function uniqueValues(values: string[]) {
   return Array.from(new Set(values.filter(Boolean)));
-}
-
-function isCoordinateField(field: string) {
-  return /^(lat|latitude|lon|lng|longitude)$/i.test(field);
 }
 
 function slugify(value: string) {

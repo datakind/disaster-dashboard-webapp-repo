@@ -11,10 +11,17 @@ import {
   clientKeyForRequest,
   readJsonRequest
 } from "@/lib/apiSecurity";
+import { getRequestAuthContext } from "@/lib/auth/requestAuth";
 import { cleaningRecommendationsForProfiles } from "@/lib/cleaningTransforms";
+import { getEntitlementService, type AiFallbackReason } from "@/lib/entitlement";
 import { requestStructuredRecommendations } from "@/lib/llmClient";
 import { parseWorkflowContext } from "@/lib/recommendationSchema";
-import { llmServerConfig, recommendationApiConfig } from "@/lib/serverConfig";
+import {
+  copilotTaskForRecommendationScope,
+  getLlmServerConfig,
+  recommendationApiConfig,
+  resolveLlmTaskConfig,
+} from "@/lib/serverConfig";
 
 export async function POST(request: Request) {
   try {
@@ -50,20 +57,105 @@ export async function POST(request: Request) {
     }
 
     const fallback = generateServerFallback(parsed);
-    const useLlm = !isRecord(body) || body.useLlm !== false;
+    const useLlm = isRecord(body) && body.useLlm === true;
     const recommendationScope = parseRecommendationScope(body);
-    if (!useLlm || !llmServerConfig.enabled) {
+    const taskConfig = resolveLlmTaskConfig(
+      copilotTaskForRecommendationScope(recommendationScope),
+    );
+    if (!useLlm) {
       return jsonNoStore(fallback);
     }
 
+    const llmServerConfig = getLlmServerConfig();
+    const entitlement = getEntitlementService();
+    const auth = await getRequestAuthContext(request);
+    if (!auth) {
+      await entitlement.recordAiEvent({
+        attemptedProviderCall: false,
+        fallbackReason: "unauthenticated",
+        route: "/api/recommend",
+        succeeded: false,
+        taskType: taskConfig.taskType,
+      });
+      return jsonNoStore(withFallbackReason(fallback, "unauthenticated"));
+    }
+
+    const entitlementDecision = await entitlement.checkAiEntitlement(
+      auth,
+      taskConfig.taskType,
+    );
+    if (!entitlementDecision.allowed) {
+      await entitlement.recordAiEvent({
+        attemptedProviderCall: false,
+        fallbackReason: entitlementDecision.reason ?? "not_entitled",
+        route: "/api/recommend",
+        succeeded: false,
+        taskType: taskConfig.taskType,
+        userId: auth.userId,
+      });
+      return jsonNoStore(
+        withFallbackReason(
+          fallback,
+          entitlementDecision.reason ?? "not_entitled",
+        ),
+      );
+    }
+
+    const preflightReason = preProviderFallbackReason(llmServerConfig);
+    if (preflightReason) {
+      await entitlement.recordAiEvent({
+        attemptedProviderCall: false,
+        fallbackReason: preflightReason,
+        model: llmServerConfig.model,
+        provider: llmServerConfig.provider,
+        route: "/api/recommend",
+        succeeded: false,
+        taskType: taskConfig.taskType,
+        userId: auth.userId,
+      });
+      return jsonNoStore(withFallbackReason(fallback, preflightReason));
+    }
+
+    const reservation = await entitlement.reserveAiUsage(
+      auth.userId,
+      entitlementDecision.usageDate,
+      taskConfig.taskType,
+    );
+    if (!reservation.reserved) {
+      await entitlement.recordAiEvent({
+        attemptedProviderCall: false,
+        fallbackReason: reservation.reason,
+        route: "/api/recommend",
+        succeeded: false,
+        taskType: taskConfig.taskType,
+        userId: auth.userId,
+      });
+      return jsonNoStore(withFallbackReason(fallback, reservation.reason));
+    }
+
+    const event = await entitlement.recordAiEvent({
+      attemptedProviderCall: true,
+      model: taskConfig.model,
+      provider: llmServerConfig.provider,
+      route: "/api/recommend",
+      taskType: taskConfig.taskType,
+      userId: auth.userId,
+    });
     const recommendations = await requestStructuredRecommendations(parsed, fallback, {
       apiKey: llmServerConfig.apiKey,
       provider: llmServerConfig.provider,
-      model: llmServerConfig.model,
-      timeoutMs: timeoutForRecommendationScope(recommendationScope),
-      maxCompletionTokens: llmServerConfig.maxCompletionTokens,
+      model: taskConfig.model,
+      timeoutMs: taskConfig.timeoutMs,
+      maxOutputTokens: taskConfig.maxOutputTokens,
       recommendationScope,
+      reasoningEffort: taskConfig.reasoningEffort,
+      verbosity: taskConfig.verbosity,
+      taskType: taskConfig.taskType,
       safetyIdentifier: anonymousSafetyIdentifier(clientKey)
+    });
+    await entitlement.markAiEventComplete(event.id, {
+      fallbackReason: recommendations.fallbackReason,
+      succeeded: recommendations.source === "llm" && !recommendations.fallbackReason,
     });
     return jsonNoStore(recommendations);
   } catch {
@@ -78,19 +170,19 @@ function generateServerFallback(context: WorkflowContext): AIRecommendationRespo
   return {
     source: "deterministic",
     summary: hasMulti && joinField
-      ? `Recommended: Review the likely join using ${joinField}, then generate the dashboard.`
-      : "Recommended: Generate a first dashboard from the profiled dataset.",
+      ? `Candidate path: review the likely join using ${joinField}, then generate a caveated dashboard.`
+      : "Candidate path: generate a first review dashboard from the profiled dataset.",
     recommendedPath: {
-      title: hasMulti ? "Review harmonization recommendation" : "Proceed with dashboard generation",
+      title: hasMulti ? "Review harmonization candidate" : "Generate review dashboard",
       rationale: hasMulti
-        ? "Multiple datasets were provided, so harmonization may improve the dashboard if fields overlap."
-        : "A single prepared dataset can already support a useful first dashboard.",
+        ? "Multiple datasets were provided, so harmonization may improve the dashboard if reviewers confirm matching fields."
+        : "A single prepared dataset can support a first review dashboard with caveats retained.",
       confidence: 0.68,
-      actions: hasMulti ? ["Accept recommendation", "Adjust"] : ["Prepare dataset"]
+      actions: hasMulti ? ["Use candidate", "Adjust"] : ["Prepare dataset"]
     },
     cleaningRecommendations: cleaningRecommendationsForProfiles(context.profiles),
     qualityConcerns: buildServerQualityConcerns(context),
-    assumptions: ["The server used minimized profile metadata only.", "No full dataset rows were sent to the model."]
+    assumptions: ["The server used minimized column summaries only.", "No full dataset rows were sent to the model."]
   };
 }
 
@@ -141,10 +233,20 @@ function parseRecommendationScope(body: unknown): RecommendationScope {
     : "dashboard";
 }
 
-function timeoutForRecommendationScope(scope: RecommendationScope) {
-  return scope === "workflow"
-    ? llmServerConfig.workflowTimeoutMs
-    : llmServerConfig.dashboardTimeoutMs;
+function preProviderFallbackReason(
+  config: ReturnType<typeof getLlmServerConfig>,
+): AiFallbackReason | undefined {
+  if (!config.enabled) return "ai_disabled";
+  if (!config.apiKey) return "missing_api_key";
+  if (config.provider !== "openai") return "unsupported_provider";
+  return undefined;
+}
+
+function withFallbackReason(
+  fallback: AIRecommendationResponse,
+  fallbackReason: AiFallbackReason,
+): AIRecommendationResponse {
+  return { ...fallback, fallbackReason };
 }
 
 function jsonNoStore(body: unknown, init?: ResponseInit) {
